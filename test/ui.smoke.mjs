@@ -9,6 +9,8 @@ dom.window.document.elementsFromPoint = () => [];
 g.document.elementsFromPoint = () => [];
 const errs = [];
 process.on('uncaughtException', (e) => { errs.push(e); });
+import { createProfile } from '../www/js/profile.js';
+dom.window.localStorage.setItem('nctcg.profile', JSON.stringify(createProfile('embracing-power', 'T')));
 await import('../www/js/app.js');
 const w = g.window.__nctcg, doc = g.document;
 const click = (el) => el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
@@ -39,6 +41,7 @@ while (w.ui.S.winner == null && steps++ < 4000) {
     click([...doc.querySelectorAll('[data-act="gbtn"]')].find((b) => /End turn/.test(b.textContent)) || q('[data-act="gbtn"]'));
   } else if (pd?.kind === 'react' && pd.player === 0) click([...doc.querySelectorAll('[data-act="gbtn"]')].find((b) => /Don't block|No reaction/.test(b.textContent)));
 }
+console.log('profile after', JSON.stringify({ e: w.ui.P.eddies, wins: w.ui.P.wins, reward: w.ui.reward, won: w.ui.S.winner }));
 console.log('finished', w.ui.S.winner, 'steps', steps, 'ms', Date.now() - t0, 'turn', w.ui.S.turnNo);
 console.log('errors', errs.map((e) => e.stack || e.message).slice(0, 3));
 process.exit(errs.length || w.ui.S.winner == null ? 1 : 0);

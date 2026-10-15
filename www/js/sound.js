@@ -1,6 +1,8 @@
 // Tiny WebAudio synth: no audio files needed.
-let ctx = null, muted = false;
+let ctx = null, muted = false, master = null, sfxVol = 0.8;
 export const setMuted = (m) => { muted = m; };
+export const setSfxVolume = (v) => { sfxVol = Math.max(0, Math.min(1, v)); if (master) master.gain.value = sfxVol; };
+function out(c) { if (!master) { master = c.createGain(); master.gain.value = sfxVol; master.connect(c.destination); } return master; }
 function ac() {
   if (!ctx) { try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; } }
   if (ctx.state === 'suspended') ctx.resume().catch(() => {});
@@ -14,14 +16,14 @@ function tone(freq, t0, dur, type = 'sine', vol = 0.12, slideTo = null) {
   g.gain.setValueAtTime(0.0001, c.currentTime + t0);
   g.gain.exponentialRampToValueAtTime(vol, c.currentTime + t0 + 0.01);
   g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + t0 + dur);
-  o.connect(g).connect(c.destination); o.start(c.currentTime + t0); o.stop(c.currentTime + t0 + dur + 0.02);
+  o.connect(g).connect(out(c)); o.start(c.currentTime + t0); o.stop(c.currentTime + t0 + dur + 0.02);
 }
 function noise(t0, dur, vol = 0.1) {
   const c = ac(); if (!c) return;
   const n = Math.floor(c.sampleRate * dur), b = c.createBuffer(1, n, c.sampleRate), d = b.getChannelData(0);
   for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
   const s = c.createBufferSource(), g = c.createGain(); s.buffer = b; g.gain.value = vol;
-  s.connect(g).connect(c.destination); s.start(c.currentTime + t0);
+  s.connect(g).connect(out(c)); s.start(c.currentTime + t0);
 }
 const SOUNDS = {
   tick: () => tone(880, 0, 0.04, 'square', 0.04),

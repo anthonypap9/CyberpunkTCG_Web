@@ -17,3 +17,11 @@ Cards without an image fall back to the text frame.
 - Implementation status per card: ● fully playable, ◐ partly automated, ○ text only (the game shows the text but does not perform it). Cards marked ○ play like vanilla cards.
 - Sell tags are not on the website, so Gear/Programs are assumed sellable and Units not (the starter decks match this). Check against your physical cards.
 - Rebuild the single file + zip with `tools/build.sh`.
+
+## Progression (starter pick, Eddies, packs)
+- First launch: choose one of the two starter decks. It is tied to a random player ID stored in the browser (`nctcg.profile`).
+- Winning a Quick match or a builder match earns €$: Learner +1, Standard +5, Sharp +15 (the tutorial pays nothing).
+- A pack costs 10 €$ and holds 12 cards (6 Common, 3 Uncommon, 2 Rare+, 1 wildcard). Layout and odds are this tool's own balance (`www/js/profile.js`).
+- Decks can only use owned cards (max 3 copies, owned Legends only). The Rival is unrestricted.
+- Profile & backup on the menu gives a save code to move progress between devices. Progress is local and honor-system.
+- Tests: `node test/profile.test.mjs`, `node test/profile.ui.mjs`.
