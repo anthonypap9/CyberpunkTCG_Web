@@ -3,7 +3,7 @@
 import { CARDS, STARTER_DECKS, expandMain } from './cards.js';
 
 export const REWARD = { learner: 1, standard: 5, sharp: 15 };
-export const PACK = { cost: 10, size: 12 };
+export const PACK = { cost: 10, size: 12, iconicChance: 0.02 };
 export const RARITIES = ['Common', 'Uncommon', 'Rare', 'Epic', 'Secret', 'Nova Rare'];
 
 // Starter cards have no printed rarity in our data: Legends count as Rare, expensive cards as Uncommon.
@@ -39,7 +39,8 @@ const pick = (rng, w) => {
   return Object.keys(w)[0];
 };
 
-export function rollPack(rng = Math.random) {
+// iconics: ids of cards that have an Iconic alt-art printing. A pack may swap its wildcard card for one (token "<id>~iconic").
+export function rollPack(rng = Math.random, iconics = []) {
   const pool = byRarity(), out = [];
   for (const s of SLOTS) {
     for (let i = 0; i < s.n; i++) {
@@ -48,8 +49,10 @@ export function rollPack(rng = Math.random) {
       out.push(ids[Math.floor(rng() * ids.length)]);
     }
   }
-  // show the best cards last
-  return out.map((id, i) => ({ id, i })).sort((a, b) => RARITIES.indexOf(rarityOf(CARDS[a.id])) - RARITIES.indexOf(rarityOf(CARDS[b.id])) || a.i - b.i).map((x) => x.id);
+  if (iconics.length && rng() < PACK.iconicChance) out[out.length - 1] = iconics[Math.floor(rng() * iconics.length)] + '~iconic';
+  // show the best cards last (an Iconic counts as the very best)
+  const rank = (t) => (t.endsWith('~iconic') ? 99 : RARITIES.indexOf(rarityOf(CARDS[t])));
+  return out.map((id, i) => ({ id, i })).sort((a, b) => rank(a.id) - rank(b.id) || a.i - b.i).map((x) => x.id);
 }
 
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -66,7 +69,7 @@ export function starterCards(starterId) {
 
 export function createProfile(starterId, name = '', rng = Math.random) {
   if (!STARTER_DECKS[starterId]) throw new Error('unknown starter');
-  return { v: 1, id: newId(rng), name: String(name).slice(0, 16), starter: starterId, eddies: 0, owned: starterCards(starterId), wins: { learner: 0, standard: 0, sharp: 0 }, packs: 0, created: Date.now() };
+  return { v: 1, id: newId(rng), name: String(name).slice(0, 16), starter: starterId, eddies: 0, owned: starterCards(starterId), iconic: {}, alt: {}, wins: { learner: 0, standard: 0, sharp: 0 }, packs: 0, created: Date.now() };
 }
 
 // Developer account: the exact player name below gets unlimited Eddies (client-side only, so not secret).
@@ -74,6 +77,8 @@ export const DEV_NAME = 'Cach3\u2122';
 export const isDev = (P) => !!P && P.name === DEV_NAME;
 export const edText = (P) => (isDev(P) ? '\u221e' : P.eddies);
 export function ensureDev(P) { if (isDev(P)) P.eddies = Math.max(P.eddies, 999999); return P; }
+export const iconicCount = (P, id) => (P.iconic && P.iconic[id]) || 0;
+export const altOn = (P, id) => !!P && iconicCount(P, id) > 0 && !(P.alt && P.alt[id] === false);
 export const ownedCount = (P, id) => P.owned[id] || 0;
 export const uniqueOwned = (P) => Object.keys(P.owned).filter((id) => P.owned[id] > 0 && CARDS[id]).length;
 
@@ -84,14 +89,19 @@ export function award(P, level) {
 }
 
 // Returns the new card ids and marks which were new, or null when the player can't afford it.
-export function buyPack(P, rng = Math.random) {
+export function buyPack(P, rng = Math.random, iconics = []) {
   ensureDev(P);
   if (P.eddies < PACK.cost) return null;
   P.eddies -= PACK.cost; P.packs++; ensureDev(P);
-  const cards = rollPack(rng);
+  const cards = rollPack(rng, iconics);
   const fresh = new Set();
   const seen = {};
-  for (const id of cards) { if (!(P.owned[id] > 0) && !seen[id]) fresh.add(id); seen[id] = 1; P.owned[id] = (P.owned[id] || 0) + 1; }
+  P.iconic = P.iconic || {};
+  for (const tok of cards) {
+    const id = tok.replace('~iconic', ''), ic = tok !== id;
+    if (!seen[tok] && (ic ? !(P.iconic[id] > 0) : !(P.owned[id] > 0))) fresh.add(tok);
+    seen[tok] = 1; P.owned[id] = (P.owned[id] || 0) + 1; if (ic) P.iconic[id] = (P.iconic[id] || 0) + 1;
+  }
   return { cards, fresh };
 }
 
@@ -110,7 +120,7 @@ const hash = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h <
 const b64 = (s) => (typeof btoa === 'function' ? btoa(unescape(encodeURIComponent(s))) : Buffer.from(s, 'utf8').toString('base64'));
 const unb64 = (s) => (typeof atob === 'function' ? decodeURIComponent(escape(atob(s))) : Buffer.from(s, 'base64').toString('utf8'));
 export function exportCode(P) {
-  const body = b64(JSON.stringify({ v: 1, id: P.id, n: P.name, s: P.starter, e: P.eddies, o: P.owned, w: P.wins, p: P.packs, c: P.created }));
+  const body = b64(JSON.stringify({ v: 1, id: P.id, n: P.name, s: P.starter, e: P.eddies, o: P.owned, i: P.iconic || {}, a: P.alt || {}, w: P.wins, p: P.packs, c: P.created }));
   return `NCT1.${body}.${hash(body)}`;
 }
 export function importCode(code) {
@@ -120,5 +130,5 @@ export function importCode(code) {
   let j; try { j = JSON.parse(unb64(m[1])); } catch { return { error: 'The code could not be read.' }; }
   if (!j || !STARTER_DECKS[j.s] || typeof j.o !== 'object') return { error: 'The code has unknown contents.' };
   const owned = {}; for (const [id, n] of Object.entries(j.o)) if (CARDS[id] && n > 0) owned[id] = Math.min(99, n | 0);
-  return { profile: { v: 1, id: String(j.id), name: String(j.n || '').slice(0, 16), starter: j.s, eddies: Math.max(0, j.e | 0), owned, wins: { learner: 0, standard: 0, sharp: 0, ...(j.w || {}) }, packs: j.p | 0, created: j.c || Date.now() } };
+  return { profile: { v: 1, id: String(j.id), name: String(j.n || '').slice(0, 16), starter: j.s, eddies: Math.max(0, j.e | 0), owned, iconic: Object.fromEntries(Object.entries(j.i || {}).filter(([id, n]) => CARDS[id] && n > 0).map(([id, n]) => [id, Math.min(99, n | 0)])), alt: Object.fromEntries(Object.entries(j.a || {}).filter(([id, v]) => CARDS[id] && v === false)), wins: { learner: 0, standard: 0, sharp: 0, ...(j.w || {}) }, packs: j.p | 0, created: j.c || Date.now() } };
 }

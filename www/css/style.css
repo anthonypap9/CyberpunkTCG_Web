@@ -457,3 +457,5 @@ a { color: var(--accent); }
 /* custom card back (art/card_back.png), set from JS when the file exists */
 .has-cardback .pkback, .has-cardback .stack .under, .has-cardback .card.back { background: var(--cardback) center / cover no-repeat, #1a1f2a; }
 .has-cardback .pkback span, .has-cardback .card.back .bl { display: none; }
+.pk.r-iconic .rtag { color: #ff4fd8; text-shadow: 0 0 8px #ff4fd8; }
+.pk.r-iconic .rtag::before { content: "★ "; }

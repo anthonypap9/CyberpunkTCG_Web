@@ -31,6 +31,15 @@ function load(step) {
 }
 function play() { if (st.audio && st.wanted && alive().length) st.audio.play().catch(() => { /* blocked until a tap */ }); }
 
+// The playlist can be refreshed without rebuilding: music/playlist.json (written by tools/make-playlist.mjs) wins over the built-in list.
+if (typeof fetch === 'function') {
+  fetch('music/playlist.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).then((list) => {
+    if (!Array.isArray(list) || !list.length) return;
+    st.tracks = list.filter((t) => t && t.file).map((t) => ({ file: t.file, title: t.title || t.file, bad: false }));
+    st.order = []; st.pos = -1; emit();
+  }).catch(() => { /* keep the built-in list */ });
+}
+
 export const music = {
   available: () => st.tracks.length > 0 && alive().length > 0,
   title: () => (st.audio && st.order.length ? st.tracks[st.order[st.pos]]?.title : '') || '',
