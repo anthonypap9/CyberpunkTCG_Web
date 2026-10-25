@@ -165,7 +165,7 @@ small, .muted { color: var(--muted); }
 .mullbox h2 { font-size: clamp(22px, 1.8vw, 32px) !important; }
 .mullbox .opts button { font-size: clamp(14px, 1.1vw, 20px); padding-block: clamp(10px, 1vw, 18px); }
 .mullhand { flex-wrap: nowrap; gap: clamp(6px, 1vw, 18px); }
-.mullhand .card { --cw: clamp(48px, min(calc((96vw - 140px) / 6.4), calc((100vh - 320px) / 1.4), 260px), 260px); }
+.mullhand .card { --cw: clamp(48px, min(calc((min(96vw, 1500px) - 175px) / 6), calc((100vh - 320px) / 1.4), 260px), 260px); }
 @media (max-width: 560px) { .mullhand { flex-wrap: wrap; } .mullhand .card { --cw: clamp(60px, 26vw, 120px); } }
 .toast { position: fixed; left: 50%; bottom: 26%; transform: translateX(-50%); background: #2b1a1c; border: 1px solid var(--bad); color: #ffd7d8; padding: 9px 14px; border-radius: 8px; font-size: 13px; z-index: 60; max-width: 90vw; text-align: center; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
 .toast.info { background: #1b2430; border-color: var(--blue); color: #d6e6ff; }
