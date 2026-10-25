@@ -462,3 +462,145 @@ test('fuzz: 150 random games finish without engine errors or broken invariants',
   }
   assert.ok(finished >= 140, `only ${finished}/150 games finished`);
 });
+
+// ------------------------------------------------------------------ batch 3: SPEND abilities, searches, steal triggers
+test('ability: Kerry draws 2 with an 8+ Gig, needs to be ready, and cannot be used when it just arrived', () => {
+  let S = start();
+  const k = add(S, 0, 'field', 'kerry-eurodyne-the-last-rockerboy');
+  setGigs(S, 0, [[20, 9]]);
+  const n = S.players[0].hand.length;
+  S.players[0].field.find((u) => u.id === k).lag = true;
+  const r = act(S, { type: 'ability', player: 0, card: k });
+  assert.equal(r.ok, false);
+  S.players[0].field.find((u) => u.id === k).lag = false;
+  S = step(S, { type: 'ability', player: 0, card: k });
+  assert.equal(S.players[0].hand.length, n + 2);
+  assert.ok(S.players[0].field.find((u) => u.id === k).spent);
+  assert.equal(act(S, { type: 'ability', player: 0, card: k }).ok, false);
+});
+test('ability: Padre sets one Gig to another Gig value; Dexter increases up to 2', () => {
+  let S = start();
+  const pd = add(S, 0, 'legends', 'padre-man-of-the-cross'); S.players[0].legends.find((l) => l.id === pd).faceUp = true;
+  setGigs(S, 0, [[20, 3]]); setGigs(S, 1, [[20, 11]]);
+  S = step(S, { type: 'ability', player: 0, card: pd });
+  S = step(S, { type: 'choose', player: 0, ids: [S.pending.options.find((o) => o.label.includes('showing 3')).id] });
+  S = step(S, { type: 'choose', player: 0, ids: [S.pending.options.find((o) => o.label.includes('showing 11')).id] });
+  assert.equal(S.players[0].gigs[0].value, 11);
+  let T = start();
+  const dx = add(T, 0, 'legends', 'dexter-deshawn-off-the-grid'); T.players[0].legends.find((l) => l.id === dx).faceUp = true;
+  setGigs(T, 0, [[20, 5]]);
+  T = step(T, { type: 'ability', player: 0, card: dx });
+  assert.ok(T.pending.options.every((o) => o.to > 5 && o.to <= 7));
+});
+test('search: Sketchy Ripper reveals a Gear from the top 3 and bottoms the rest', () => {
+  let S = start();
+  const P = S.players[0];
+  const deckN = P.deck.length;
+  const gear = P.deck.find((c) => CARDS[c.card].type === 'gear');
+  // put a gear on top
+  const i = P.deck.indexOf(gear); P.deck.splice(i, 1); P.deck.unshift(gear);
+  const rip = add(S, 0, 'field', 'sketchy-ripper'); S.players[0].field.find((u) => u.id === rip).lag = false;
+  setGigs(S, 1, [[20, 9]]);
+  const h = P.hand.length;
+  S = step(S, { type: 'attack', player: 0, unit: rip, target: { type: 'gigs' } });
+  S = autoChoose(S, 0);
+  assert.equal(S.players[0].hand.length, h + 1);
+  assert.equal(S.players[0].deck.length, deckN - 1);
+  assert.equal(S.players[0].stash.length, 0);
+});
+test('trigger: Wraith Marauders readies a spent Unit whose power equals the stolen Gig value', () => {
+  let S = start();
+  const w = add(S, 0, 'field', 'wraith-marauders'); S.players[0].field.find((u) => u.id === w).lag = false;
+  const o = add(S, 0, 'field', 'chrome-fang'); const ou = S.players[0].field.find((u) => u.id === o); ou.spent = true;
+  setGigs(S, 1, [[20, CARDS['chrome-fang'].power]]);
+  S = step(S, { type: 'attack', player: 0, unit: w, target: { type: 'gigs' } });
+  S = step(S, { type: 'pass', player: 1 });
+  S = autoChoose(S, 0);
+  assert.equal(S.players[0].field.find((u) => u.id === o).spent, false);
+});
+test('Muamar: a protected Unit survives a fight', () => {
+  const S = start();
+  const a = add(S, 0, 'field', 'chrome-fang'); const b = add(S, 1, 'field', 'chrome-fang');
+  const ua = S.players[0].field.find((u) => u.id === a); ua.lag = false; ua.safeFight = true; S.players[1].field.find((u) => u.id === b).spent = true;
+  S.players[0].field.find((u) => u.id === a).tempPower = 0;
+  const T = step(S, { type: 'attack', player: 0, unit: a, target: { type: 'unit', id: b } });
+  const U = step(T, { type: 'pass', player: 1 });
+  assert.ok(find(U, a), 'protected attacker survived');
+  assert.ok(!find(U, b), 'defender defeated');
+});
+
+// ------------------------------------------------------------------ batch 4: fights, must-attack, replacement, QUICK
+test('Mox Inciters forces a rival Unit to attack next turn (end turn is blocked until it does)', () => {
+  let S = start();
+  eddies(S, 0, 4);
+  const victim = add(S, 1, 'field', 'psycho-squad');
+  const mox = add(S, 0, 'hand', 'mox-inciters');
+  S = step(S, { type: 'play', player: 0, card: mox });
+  S = autoChoose(S, 0);
+  assert.equal(find(S, victim).mustAttack, S.turnNo + 1);
+  S = step(S, { type: 'endTurn', player: 0 });
+  if (S.pending?.kind === 'gainGig') S = step(S, { type: 'gainGig', player: 1, die: S.pending.options[0] });
+  S = autoChoose(S, 0);
+  assert.equal(S.active, 1);
+  find(S, victim).lag = false;
+  const r = act(S, { type: 'endTurn', player: 1 });
+  assert.equal(r.ok, false, 'cannot end turn while a forced attacker can attack');
+  assert.ok(!legalActions(S).some((a) => a.type === 'endTurn'));
+});
+test('Maelstrom Zealots defeat the unit that beat them; Johnny beats CORPO Units', () => {
+  let S = start();
+  const z = add(S, 1, 'field', 'maelstrom-zealots'); find(S, z).spent = true;
+  const a = add(S, 0, 'field', 'chrome-fang'); find(S, a).lag = false;
+  S = step(S, { type: 'attack', player: 0, unit: a, target: { type: 'unit', id: z } });
+  S = step(S, { type: 'pass', player: 1 });
+  S = autoChoose(S, 0);
+  assert.ok(!find(S, z) && !find(S, a), 'both defeated');
+  let T = start();
+  const sec = add(T, 1, 'field', 'corpo-security'); find(T, sec).spent = true;
+  const j = add(T, 0, 'field', 'johnny-silverhand-never-stop-fighting'); find(T, j).lag = false; find(T, j).tempPower = -99;
+  T = step(T, { type: 'attack', player: 0, unit: j, target: { type: 'unit', id: sec } });
+  T = step(T, { type: 'pass', player: 1 });
+  T = autoChoose(T, 0);
+  assert.ok(!find(T, sec) && find(T, j), 'Johnny wins even at 0 power');
+});
+test('Jackie Welles (Mama\'s Favorite) can be defeated instead of a friendly Unit for 1 Eddie', () => {
+  let S = start();
+  eddies(S, 0, 8);
+  const j = add(S, 0, 'field', 'jackie-welles-mama-s-favorite'); S.players[0].field.find((u) => u.id === j).isLegend = true;
+  const v = add(S, 0, 'field', 'chrome-fang'); find(S, v).spent = true;
+  const killer = add(S, 1, 'field', 'psycho-squad');
+  // rival attacks the spent unit on their turn: simulate by calling the engine's defeat via a Program
+  const det = add(S, 0, 'hand', 'wild-in-the-streets');
+  S = step(S, { type: 'play', player: 0, card: det });
+  assert.equal(S.pending?.kind, 'choose', 'Jackie asks');
+  S = step(S, { type: 'choose', player: 0, ids: ['pay'] });
+  assert.ok(find(S, v), 'unit saved');
+  assert.ok(!find(S, j), 'Jackie gone');
+  void killer;
+});
+test('Safety Override defeats the unit that beat your Unit; Cyberpsychosis burns out at end of turn', () => {
+  let S = start();
+  eddies(S, 0, 4);
+  const mine = add(S, 0, 'field', 'chrome-fang'); find(S, mine).lag = false;
+  const foe = add(S, 1, 'field', 'psycho-squad'); find(S, foe).spent = true;
+  S.players[0].safety = true;
+  S = step(S, { type: 'attack', player: 0, unit: mine, target: { type: 'unit', id: foe } });
+  S = step(S, { type: 'pass', player: 1 });
+  assert.ok(!find(S, mine) && !find(S, foe), 'attacker lost, Safety Override took the winner too');
+  let T = start();
+  const u = add(T, 0, 'field', 'chrome-fang'); find(T, u).lag = false;
+  T.players[0].field.find((x) => x.id === u).gear.push({ id: 'g1', card: 'mantis-blades', owner: 0, gear: [], spent: false });
+  find(T, u).cyber = true; find(T, u).stole = true;
+  setGigs(T, 1, [[20, 3]]);
+  T = step(T, { type: 'endTurn', player: 0 });
+  assert.ok(!find(T, u), 'burned out');
+});
+test('Panam (Strength Through Family) makes Calling a Legend free', () => {
+  const S = start();
+  const before = S.players[0].eddies.length;
+  add(S, 0, 'field', 'panam-palmer-strength-through-family');
+  const r = act(S, { type: 'call', player: 0 });
+  assert.ok(r.ok);
+  assert.equal(r.state.players[0].eddies.filter((e) => e.spent).length, 0);
+  void before;
+});

@@ -1,12 +1,12 @@
 import { CARDS, STARTER_DECKS, displayName } from './cards.js';
-import { newGame, act, legalActions, find, locate, power, cred, def, dn, checkPlay, checkSell, checkGoSolo, checkAttack, checkCall, blockersFor, rival, hasBlocker } from './engine.js';
+import { abilitiesOf, callCost, newGame, act, legalActions, find, locate, power, cred, def, dn, checkPlay, checkSell, checkGoSolo, checkAttack, checkCall, blockersFor, rival, hasBlocker } from './engine.js';
 import { aiAct, LEVELS } from './ai.js';
 import { sfx, setMuted, setSfxVolume } from './sound.js';
 import { music } from './music.js';
 import { LEXICON, LEX_GROUPS } from './lexicon.js';
 import { analyse, typeAdvice, synergy, pairsWith, ramLimits, implOf, IMPL_LABEL, deckProblems } from './builder.js';
 import { expandMain } from './cards.js';
-import { REWARD, PACK, SLOTS, RARITIES, rarityOf, createProfile, award, buyPack, isDev, edText, ensureDev, DEV_NAME, missingFor, ownedCount, uniqueOwned, exportCode, importCode } from './profile.js';
+import { REWARD, PACK, SLOTS, RARITIES, rarityOf, createProfile, award, buyPack, iconicCount, altOn, isDev, edText, ensureDev, DEV_NAME, missingFor, ownedCount, uniqueOwned, exportCode, importCode } from './profile.js';
 
 const HUMAN = 0;
 const $ = (s, r = document) => r.querySelector(s);
@@ -39,7 +39,7 @@ if (ui.P) ensureDev(ui.P);
 if (!ui.P) ui.screen = 'welcome';
 else if (missingFor(ui.P, getDeck(ui.mine)).length) { ui.mine = ui.P.starter; store.set('mine', ui.mine); }
 setSfxVolume(store.get('sfxVol', 0.8));
-music.setVolume(store.get('musicVol', 0.4)); music.setMuted(store.get('musicMute', false));
+music.setVolume(store.get('musicVol', 0.4)); music.setMuted(!store.get('musicOn', false)); // music starts muted on a first visit; the player turns it on in the Audio panel
 ui.audio = false; ui.handSort = store.get('handSort', 'none'); ui.lexOpen = false; ui.lexQ = '';
 const startMusic = () => { music.start(); document.removeEventListener('pointerdown', startMusic); document.removeEventListener('keydown', startMusic); };
 document.addEventListener('pointerdown', startMusic); document.addEventListener('keydown', startMusic);
@@ -161,7 +161,13 @@ function buildMoves(S) {
         buttons.unshift({ a, label: `🛡 Block with ${dn(bu)} (power ${power(S, bu)})`, primary: true });
         break;
       }
-      case 'call': { const rE = P.eddies.filter((e) => !e.spent).length; buttons.push({ a, label: `Call a Legend (costs 1 €$: ${rE ? 'an Eddie' : 'one of your ready Legends'})` }); break; }
+      case 'call': { const rE = P.eddies.filter((e) => !e.spent).length; buttons.push({ a, label: callCost(S, HUMAN) === 0 ? 'Call a Legend (free: Panam)' : `Call a Legend (costs 1 €$: ${rE ? 'an Eddie' : 'one of your ready Legends'})` }); break; }
+      case 'ability': {
+        let src = null; for (const h of [...P.field, ...P.legends]) { if (h.id === a.card) src = h; for (const g of h.gear) if (g.id === a.card) src = g; }
+        const ab = abilitiesOf(S, HUMAN, a.card)[a.n || 0];
+        if (src && ab) buttons.push({ a, label: `⚡ ${dn(src)}: ${ab.label}` });
+        break;
+      }
       case 'endTurn': buttons.push({ a, label: 'End turn', primary: true }); break;
       case 'pass': buttons.push({ a, label: S.pending?.kind === 'react' && S.combat ? "Don't block — let it happen" : 'No reaction — let it resolve', primary: false }); break;
       default: break;
@@ -206,7 +212,14 @@ function explain(S, id) {
 // ------------------------------------------------------------------ official art (optional local files in art/)
 const artOK = new Set(), artBad = new Set();
 document.addEventListener('load', (e) => { const i = e.target; if (i.classList?.contains('art')) { artOK.add(i.dataset.card); i.closest('.card')?.classList.add('art-on'); } }, true);
-document.addEventListener('error', (e) => { const i = e.target; if (i.classList?.contains('art')) { artBad.add(i.dataset.card); i.remove(); } }, true);
+document.addEventListener('error', (e) => {
+  const i = e.target; if (!i.classList?.contains('art')) return;
+  const k = i.dataset.card; artBad.add(k);
+  if (k.endsWith('~iconic') && !artBad.has(k.slice(0, -8))) { i.dataset.card = k.slice(0, -8); i.src = `art/${i.dataset.card}.webp`; } else i.remove();
+}, true);
+// Iconic alt-art: art/iconics.json (written by tools/fetch-iconics.mjs) lists the cards that have an Iconic printing with art
+const ICONICS = new Set();
+if (typeof fetch === 'function') fetch('art/iconics.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : [])).then((l) => { if (Array.isArray(l)) l.forEach((id) => CARDS[id] && ICONICS.add(id)); }).catch(() => {});
 
 // ------------------------------------------------------------------ view helpers
 const SHAPES = [4, 6, 8, 10, 12, 20];
@@ -222,13 +235,15 @@ const holoTier = (d) => (d.rarity === 'Secret' || d.rarity === 'Nova Rare' ? 2 :
 function cardEl(inst, o = {}) {
   const d = CARDS[inst.card];
   const S = ui.S;
+  const useAlt = o.alt ?? (inst.owner === HUMAN && !!ui.P && ICONICS.has(inst.card) && altOn(ui.P, inst.card));
+  const artId = useAlt ? inst.card + '~iconic' : inst.card;
   const classes = ['card', d.color];
-  if (artOK.has(inst.card)) classes.push('art-on');
+  if (artOK.has(artId)) classes.push('art-on');
   if (o.mini) classes.push('mini');
   if (inst.spent && o.zone !== 'hand') classes.push('spent');
   if (inst.lag) classes.push('lag');
   if (o.zone === 'legends' && inst.faceUp) classes.push('faceup-leg');
-  const tier = holoTier(d); if (tier && !o.back) classes.push('holo', tier === 2 ? 'holo-gold' : 'holo-x');
+  const tier = useAlt ? 2 : holoTier(d); if (tier && !o.back) classes.push('holo', tier === 2 ? 'holo-gold' : 'holo-x');
   if (o.cls) classes.push(o.cls);
   if (ui.sel === inst.id) classes.push('sel');
   const attr = `data-id="${inst.id}" data-zone="${o.zone || ''}" data-owner="${inst.owner}"`;
@@ -244,7 +259,7 @@ function cardEl(inst, o = {}) {
   const ram = d.ram ? `<div class="ram">RAM ${d.ram}</div>` : '';
   const peek = o.peeked ? '<div class="ram" style="top:auto;bottom:2.6em;color:var(--accent)">peeked</div>' : '';
   return `<div class="${classes.join(' ')}" ${attr} ${o.zone === 'zoom' ? '' : `title="${esc(displayName(d))}"`}>
-    ${artBad.has(inst.card) ? '' : `<img class="art" data-card="${inst.card}" src="art/${inst.card}.webp" alt="" draggable="false">`}<div class="cost ${d.sell ? 'sell' : ''}">${d.cost == null ? '–' : d.cost}</div><div class="type">${d.type}</div>${ram}
+    ${artBad.has(artId) && (!useAlt || artBad.has(inst.card)) ? '' : `<img class="art" data-card="${artBad.has(artId) ? inst.card : artId}" src="art/${artBad.has(artId) ? inst.card : artId}.webp" alt="" draggable="false">`}<div class="cost ${d.sell ? 'sell' : ''}">${d.cost == null ? '–' : d.cost}</div><div class="type">${d.type}</div>${ram}
     <div class="body"><div class="name">${esc(d.name)}${d.sub ? `<small>${esc(d.sub)}</small>` : ''}</div>
     <div class="txt">${esc(d.text)}</div></div><div class="tags">${esc(d.tags.join(' · '))}</div>${gear}${pw}${peek}${tier ? '<div class="foil"></div>' : ''}</div>`;
 }
@@ -484,7 +499,7 @@ function renderWelcome() {
   const card = (id) => cardEl({ id: 'w-' + id, card: id, owner: 0, gear: [], spent: false }, { zone: 'zoom' }).replace('class="card ', 'style="--cw:112px" class="card ');
   app().innerHTML = `<div class="screen"><div class="wrap">
     <div class="brand"><h1>Night City TCG Trainer</h1><span class="tag">unofficial fan tool</span></div>
-    <p class="fine">Welcome, choreboy. Pick your starter deck. It is tied to your player ID, and it is the only deck you start with. Win games to earn Eddies (€$), buy packs, and build custom decks from the cards you unlock.</p>
+    <p class="fine">Welcome to Night City. Pick your starter deck. It is tied to your player ID, and it is the only deck you start with. Win games to earn Eddies (€$), buy packs, and build custom decks from the cards you unlock.</p>
     <div class="panel"><h3>How you earn</h3><p class="fine" style="margin:0;color:#c8cfdb">Beat the Rival: ${LEVELS.map((l) => `<b>${cap(l)} +${REWARD[l]} €$</b>`).join(' · ')}. A pack costs <b>${PACK.cost} €$</b> and has <b>${PACK.size} cards</b>. You can only build decks from cards you own (up to 3 copies each).</p></div>
     <div class="grid2">${Object.values(STARTER_DECKS).map((d) => {
       const info = STARTER_INFO[d.id] || { style: '', diff: '', pts: [] };
@@ -518,9 +533,11 @@ function renderShopKeepScroll() { const sc = $('.screen'); const y = sc ? sc.scr
 function renderShop() {
   const P = ui.P, pk = ui.pack, can = P.eddies >= PACK.cost;
   const rare = SLOTS[2].w; const tot = Object.values(rare).reduce((a, b) => a + b, 0);
-  const rar = (id) => rarityOf(CARDS[id]);
-  const cls = (id) => 'r-' + rar(id).toLowerCase().replace(/\W+/g, '');
-  const face = (id, i, extra = '') => `<div class="pkfront">${cardEl({ id: 'p' + i, card: id, owner: 0, gear: [], spent: false }, { zone: 'zoom' })}${pk.fresh.has(id) && pk.first[id] === i ? '<span class="newtag">NEW</span>' : ''}<span class="rtag">${rar(id)}</span></div>`;
+  const isIc = (t) => t.endsWith('~iconic');
+  const base = (t) => t.replace('~iconic', '');
+  const rar = (t) => (isIc(t) ? 'Iconic' : rarityOf(CARDS[t]));
+  const cls = (t) => (isIc(t) ? 'r-iconic r-secret' : 'r-' + rar(t).toLowerCase().replace(/\W+/g, ''));
+  const face = (id, i, extra = '') => `<div class="pkfront">${cardEl({ id: 'p' + i, card: base(id), owner: 0, gear: [], spent: false }, { zone: 'zoom', alt: isIc(id) })}${pk.fresh.has(id) && pk.first[id] === i ? '<span class="newtag">NEW</span>' : ''}<span class="rtag">${rar(id)}</span></div>`;
   const n = pk ? pk.cards.length : 0, done = pk && pk.idx > n;
   let reveal = '';
   if (pk && !done) {
@@ -565,7 +582,7 @@ function renderBrowser() {
     <div class="row" style="margin:8px 0 12px"><button data-act="menu">← Back</button><h2>Collection</h2><span class="muted">${uniqueOwned(ui.P)} / ${Object.keys(CARDS).length} different cards · ${cards.length} shown</span><span class="spacer"></span><button data-act="shop">📦 Packs</button></div>
     <div class="row" style="margin-bottom:14px"><input type="search" placeholder="Search name, text, tag…" value="${esc(q.q)}" data-bf="q"> ${sel('type', ['unit', 'gear', 'program', 'legend'], q.type)} ${sel('color', ['red', 'green', 'blue', 'yellow'], q.color)}
       <select data-bf="own"><option value="">Owned + missing</option><option value="have" ${q.own === 'have' ? 'selected' : ''}>Owned only</option><option value="miss" ${q.own === 'miss' ? 'selected' : ''}>Missing only</option></select></div>
-    <div class="cardgrid">${cards.map((c) => `<div class="cwrap ${own(c) ? '' : 'unowned'}">${cardEl({ id: 'b-' + c.id, card: c.id, owner: 0, gear: [], spent: false }, { zone: 'browser' })}<span class="own">${own(c) ? '×' + own(c) : 'not owned'}</span></div>`).join('')}</div>
+    <div class="cardgrid">${cards.map((c) => `<div class="cwrap ${own(c) ? '' : 'unowned'}">${cardEl({ id: 'b-' + c.id, card: c.id, owner: 0, gear: [], spent: false }, { zone: 'browser' })}<span class="own">${own(c) ? '×' + own(c) + (iconicCount(ui.P, c.id) ? ' · ★' + iconicCount(ui.P, c.id) : '') : 'not owned'}</span></div>`).join('')}</div>
   </div></div>${ui.zoomCard ? zoomModal(ui.zoomCard) : ''}${ui.lexOpen ? lexModal() : ''}`;
 }
 
@@ -614,6 +631,7 @@ function zoomModal(cardId) {
     <div class="zcard">${cardEl({ id: 'z', card: cardId, owner: 0, gear: [], spent: false }, { zone: 'zoom' }).replace('class="card ', 'style="--cw:min(340px,72vw,48vh)" class="card ')}</div>
     <aside class="zpanel zr"><h4>Rules text</h4><p class="ztxt">${hiKw(txt || '(no rules text)').replace(/\n/g, '<br>')}</p>
       ${gl.length ? `<h4>What the words mean</h4><dl>${gl.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+      ${ui.P && ICONICS.has(cardId) ? (iconicCount(ui.P, cardId) ? `<p class="fine"><b>★ Iconic printing ×${iconicCount(ui.P, cardId)}</b></p><button data-act="alt" data-id="${cardId}">${altOn(ui.P, cardId) ? 'Iconic art: ON (tap to use standard art)' : 'Iconic art: OFF (tap to use it)'}</button>` : '<p class="fine">An Iconic alt-art printing of this card exists. Find it in packs.</p>') : ''}
       <p class="fine impl-${im}">${IMPL_LABEL[im]}</p></aside>
     <button class="zclose" data-act="closeZoom" aria-label="Close">✕</button>
   </div></div>`;
@@ -837,7 +855,7 @@ document.addEventListener('click', (e) => {
       case 'shop': ui.screen = 'shop'; ui.zoomCard = null; ui.rules = false; return render();
       case 'play-from-shop': ui.screen = 'menu'; return render();
       case 'buy': {
-        const r = buyPack(ui.P); if (!r) return toast('Not enough Eddies.', 'warn');
+        const r = buyPack(ui.P, Math.random, [...ICONICS]); if (!r) return toast('Not enough Eddies.', 'warn');
         saveP(); const first = {}; r.cards.forEach((id, i) => { if (!(id in first)) first[id] = i; });
         ui.pack = { cards: r.cards, fresh: r.fresh, first, idx: 0 }; sfx('call'); render(); {  } return;
       }
@@ -859,6 +877,7 @@ document.addEventListener('click', (e) => {
       }
       case 'pkskip': { const pk = ui.pack; if (!pk) return; e.stopPropagation(); pk.idx = pk.cards.length + 1; sfx('tap'); return renderShop(); }
       case 'pkdone': ui.pack = null; return renderShop();
+      case 'alt': { const id = b.dataset.id; ui.P.alt = ui.P.alt || {}; ui.P.alt[id] = !altOn(ui.P, id); saveP(); return render(); }
       case 'pmenu': e.preventDefault(); ui.pmenu = true; ui.pconfirm = null; return render();
       case 'pmenux': if (b.classList.contains('modal') && e.target !== b) return; ui.pmenu = false; ui.pconfirm = null; return render();
       case 'pcopy': { const t = $('#pcode'); if (t) { t.select(); try { navigator.clipboard?.writeText(t.value); } catch { /* manual copy */ } toast('Save code copied (or selected, press Ctrl+C).', 'info'); } return; }
@@ -917,7 +936,7 @@ document.addEventListener('click', (e) => {
       case 'audio': ui.audio = !ui.audio; return render();
       case 'mnext': music.next(); return;
       case 'mprev': music.prev(); return;
-      case 'mmute': music.setMuted(!music.muted()); store.set('musicMute', music.muted()); return;
+      case 'mmute': music.setMuted(!music.muted()); store.set('musicOn', !music.muted()); return;
       case 'closeZoom': if (b.classList.contains('modal') && e.target !== b) return; ui.zoomCard = null; return render();
       case 'review': { const w = $('.modal'); if (w) w.remove(); return; }
       case 'move': return runMove((ui.moves.byObj.get(ui.sel) || [])[Number(b.dataset.i)]);
@@ -961,7 +980,7 @@ function S_isPublic(inst) { return ui.S.players[inst.owner].field.includes(inst)
 document.addEventListener('input', (e) => {
   const t0 = e.target;
   if (t0.dataset?.lexq) { ui.lexQ = t0.value; const l = $('#lexlist'); if (l) l.innerHTML = lexList(ui.lexQ); return; }
-  if (t0.dataset?.vol) { const v = Number(t0.value) / 100; if (t0.dataset.vol === 'music') { music.setVolume(v); store.set('musicVol', v); if (v > 0 && music.muted()) { music.setMuted(false); store.set('musicMute', false); } } else { setSfxVolume(v); store.set('sfxVol', v); sfx('tap'); } return; }
+  if (t0.dataset?.vol) { const v = Number(t0.value) / 100; if (t0.dataset.vol === 'music') { music.setVolume(v); store.set('musicVol', v); if (v > 0 && music.muted()) { music.setMuted(false); store.set('musicOn', true); } } else { setSfxVolume(v); store.set('sfxVol', v); sfx('tap'); } return; }
   if (t0.dataset?.pname) { ui.pname = t0.value; return; }
   if (t0.dataset?.bn) { ui.bd.name = t0.value; return; }
   if (t0.dataset?.bff === 'q') { ui.bf.q = t0.value; const pos = t0.selectionStart; renderBuilder(); const i = $('[data-bff="q"]'); if (i) { i.focus(); i.setSelectionRange(pos, pos); } return; }

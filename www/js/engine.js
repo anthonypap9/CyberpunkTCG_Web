@@ -8,7 +8,7 @@
 // Anything the engine had to assume because the public rules don't say is marked ASSUMPTION.
 
 import { CARDS, expandMain, displayName } from './cards.js';
-import { EFFECTS } from './effects.js';
+import { EFFECTS, ABILITIES } from './effects.js';
 
 export const SIDES = [4, 6, 8, 10, 12, 20];
 export const def = (inst) => CARDS[inst.card];
@@ -191,6 +191,10 @@ function spendInst(S, inst) {
   if (inst.spent) return false;
   inst.spent = true;
   fireGear(S, inst, 'spend');
+  if (S.players[inst.owner].field.includes(inst)) {
+    queueFrame(S, inst.card, 'spent', inst.owner, { self: inst.id });
+    for (const u of S.players[inst.owner].field) if (u !== inst) queueFrame(S, u.card, 'friendSpent', u.owner, { self: u.id, d: { equipped: inst.gear.length > 0, by: inst.id } });
+  } else if (inst.gear.length) for (const u of S.players[inst.owner].field) queueFrame(S, u.card, 'friendSpent', u.owner, { self: u.id, d: { equipped: true, by: inst.id } });
   return true;
 }
 
@@ -203,7 +207,7 @@ function bottomDeck(S, inst) {
   inst.gear = [];
   log(S, `${dn(inst)} is put on the bottom of its owner's deck.`);
   if (inst.isLegend) return; // removed from the game
-  Object.assign(inst, { spent: false, lag: false, tempPower: 0, stole: false, noReady: false, noAttack: false, freeAttack: null, tempBlocker: false });
+  Object.assign(inst, { spent: false, lag: false, tempPower: 0, stole: false, noReady: false, noAttack: false, freeAttack: null, tempBlocker: false, safeFight: false, mustAttack: 0, cyber: false, fought: false, fightBonus: 0, stealMinus: 0, firstWin: false, firstSteal: false, once: {}, hitReady: false, jackieChecked: false });
   P.deck.push(inst);
 }
 function returnToHand(S, inst) {
@@ -215,7 +219,7 @@ function returnToHand(S, inst) {
   inst.gear = [];
   log(S, `${dn(inst)} returns to its owner's hand.`);
   if (inst.isLegend) return;
-  Object.assign(inst, { spent: false, lag: false, tempPower: 0, stole: false, noReady: false, noAttack: false, freeAttack: null, tempBlocker: false });
+  Object.assign(inst, { spent: false, lag: false, tempPower: 0, stole: false, noReady: false, noAttack: false, freeAttack: null, tempBlocker: false, safeFight: false, mustAttack: 0, cyber: false, fought: false, fightBonus: 0, stealMinus: 0, firstWin: false, firstSteal: false, once: {}, hitReady: false, jackieChecked: false });
   P.hand.push(inst);
 }
 
@@ -225,13 +229,19 @@ function defeat(S, inst) {
   if (i < 0) return;
   const dm = inst.gear.find((g) => g.card === 'deadman-transmitter');
   if (dm) { inst.gear = inst.gear.filter((g) => g !== dm); P.trash.push(dm); log(S, `Deadman Transmitter is defeated instead of ${dn(inst)}.`); return; }
+  if (!inst.isLegend && !inst.jackieChecked) {
+    const j = P.field.find((x) => x.card === 'jackie-welles-mama-s-favorite' && x !== inst);
+    if (j) { const src = sources(S, inst.owner); if (src.eds.length + src.legs.length >= 1) { queueFrame(S, j.card, 'jackieSave', inst.owner, { self: j.id, d: { unit: inst.id } }); return; } }
+  }
   P.field.splice(i, 1);
   log(S, `${dn(inst)} is defeated.`);
   fire(S, inst, 'defeated');
+  fireGear(S, inst, 'defeated');
+  if (inst.gear.length && !inst.isLegend) legendTrigger(S, inst.owner, 'friendDefeatedEquipped');
   for (const g of inst.gear) P.trash.push(g);
   inst.gear = [];
   if (inst.isLegend) { log(S, `${dn(inst)} is removed from the game.`); return; }
-  Object.assign(inst, { spent: false, lag: false, tempPower: 0, stole: false, noReady: false, noAttack: false, freeAttack: null, tempBlocker: false });
+  Object.assign(inst, { spent: false, lag: false, tempPower: 0, stole: false, noReady: false, noAttack: false, freeAttack: null, tempBlocker: false, safeFight: false, mustAttack: 0, cyber: false, fought: false, fightBonus: 0, stealMinus: 0, firstWin: false, firstSteal: false, once: {}, hitReady: false, jackieChecked: false });
   P.trash.push(inst);
 }
 
@@ -256,6 +266,13 @@ function makeG(S) {
     P: (p) => S.players[p], name: (p) => S.names[p], cred: (p) => cred(S, p), log: (t) => log(S, t),
     draw: (p, n) => draw(S, p, n), defeat: (u) => defeat(S, u), spend: (u) => spendInst(S, u),
     callLegend: (p, o) => doCall(S, p, o),
+    canPay: (p, n) => { const x = sources(S, p); return x.eds.length + x.legs.length >= n; },
+    pay: (p, n, ids) => pay(S, p, n, ids),
+    die: (id) => { for (const P of S.players) { const d = P.gigs.find((x) => x.id === id); if (d) return d; } return null; },
+    dieOwner: (id) => S.players.findIndex((P) => P.gigs.some((x) => x.id === id)),
+    reroll(d) { const from = d.value; d.value = 1 + rint(S, d.sides); log(S, `A d${d.sides} is rerolled: ${from} → ${d.value}.`); },
+    touch(actor, gigOwner) { if (gigOwner < 0 || gigOwner === actor) return; for (const u of S.players[gigOwner].field) queueFrame(S, u.card, 'rivalTouched', u.owner, { self: u.id }); },
+    trigger: (inst, trig, d = {}) => queueFrame(S, inst.card, trig, inst.owner, { self: inst.id, d }),
     discard(p, id) {
       const P = S.players[p]; const i = P.hand.findIndex((c) => c.id === id);
       if (i >= 0) { const [c] = P.hand.splice(i, 1); P.trash.push(c); log(S, `${S.names[p]} discards ${dn(c)}.`); }
@@ -270,13 +287,14 @@ function makeG(S) {
       for (const e of S.players[p].eddies) if (e.spent && k < n) { e.spent = false; k++; }
       if (k) log(S, `${S.names[p]} readies ${k} Eddie${k > 1 ? 's' : ''}.`);
     },
-    swapGigs(a, b) {
+    swapGigs(a, b, actor) {
       const [x, y] = [S.players[0], S.players[1]];
       const find1 = (id) => { for (const P of [x, y]) { const i = P.gigs.findIndex((d) => d.id === id); if (i >= 0) return { P, i }; } };
       const A = find1(a), B = find1(b);
       if (!A || !B || A.P === B.P) return;
       const t = A.P.gigs[A.i]; A.P.gigs[A.i] = B.P.gigs[B.i]; B.P.gigs[B.i] = t;
       log(S, 'Two Gigs were swapped.');
+      if (actor != null) { G.touch(actor, S.players.indexOf(A.P)); G.touch(actor, S.players.indexOf(B.P)); }
     },
     bottomDeck: (u) => bottomDeck(S, u), returnToHand: (u) => returnToHand(S, u),
     mill(p, n) { const P = S.players[p]; const out = []; for (let i = 0; i < n && P.deck.length; i++) { const c = P.deck.shift(); P.trash.push(c); out.push(c); } if (out.length) log(S, `${S.names[p]} trashes ${out.length} card(s) from the top of their deck.`); return out; },
@@ -303,6 +321,7 @@ function makeG(S) {
       const [c] = from.splice(i, 1);
       log(S, `${S.names[p]} plays ${dn(c)} for free.`);
       P.trash.push(c);
+      if (def(c).tags.includes('BRAINDANCE')) legendTrigger(S, p, 'playBraindance');
       queueFrame(S, c.card, 'play', p, { self: c.id });
       if (bottom) { const k = P.trash.indexOf(c); if (k >= 0) { P.trash.splice(k, 1); P.deck.push(c); } }
       return c;
@@ -360,7 +379,7 @@ function makeG(S) {
       const [dieId, v] = id.split('>');
       for (const P of S.players) {
         const d = P.gigs.find((x) => x.id === dieId);
-        if (d) { const from = d.value; d.value = Number(v); log(S, `A d${d.sides} Gig changes from ${from} to ${d.value}.`); return { die: d, from, to: d.value }; }
+        if (d) { const from = d.value; d.value = Number(v); log(S, `A d${d.sides} Gig changes from ${from} to ${d.value}.`); G.touch(f.owner, S.players.indexOf(P)); return { die: d, from, to: d.value }; }
       }
       return null;
     },
@@ -401,19 +420,38 @@ const INTERNAL = {
         if (!att) { f.i = 99; return; }
         const pw = power(S, att, true);
         const R = S.players[rival(f.owner)];
-        const options = R.gigs.filter((d) => !R.gigShield || d.value <= pw).map((d) => ({ id: d.id, label: `d${d.sides} showing ${d.value}` }));
+        const options = R.gigs.filter((d) => (!R.gigShield || d.value <= pw) && !(att.isLegend && R.legendShield && d.value < pw)).map((d) => ({ id: d.id, label: `d${d.sides} showing ${d.value}` }));
         if (!options.length) { f.i = 99; return; }
         return G.ask(f, { player: f.owner, prompt: `Steal a Gig (${f.d.n} left)`, options, optional: false });
       },
       (G, f) => {
         const S = G.S;
+        f.d.pick = f.answer && f.answer[0]; f.d.guard = false;
+        const R = S.players[rival(f.owner)];
+        const d = R.gigs.find((x) => x.id === f.d.pick);
+        if (!d || !R.field.some((u) => u.card === 'alt-cunningham-mother-of-daemons')) return;
+        const opts = R.hand.filter((c) => (def(c).cost ?? -1) === d.value).map((c) => ({ id: c.id, label: dn(c) }));
+        if (!opts.length) return;
+        f.d.guard = true;
+        return G.ask(f, { player: rival(f.owner), prompt: `Alt Cunningham: discard a card with cost ${d.value} to stop this Gig being stolen?`, options: opts, optional: true });
+      },
+      (G, f) => {
+        const S = G.S;
         const R = S.players[rival(f.owner)], M = S.players[f.owner];
-        const i = R.gigs.findIndex((d) => d.id === (f.answer && f.answer[0]));
+        const cid = f.d.guard && f.answer && f.answer[0];
+        if (cid) { G.discard(rival(f.owner), cid); log(S, 'Alt Cunningham stops the steal.'); f.d.n--; f.i = 0; return; }
+        const i = R.gigs.findIndex((d) => d.id === f.d.pick);
         if (i >= 0) {
           const [d] = R.gigs.splice(i, 1);
           M.gigs.push(d);
           const att = find(S, f.d.unit); if (att) att.stole = true;
           log(S, `${S.names[f.owner]} steals a d${d.sides} (showing ${d.value}).`);
+          if (att) {
+            G.trigger(att, 'stole', { value: d.value, sides: d.sides });
+            fireGear(S, att, 'stole');
+            for (const u of M.field) G.trigger(u, 'friendStole', { value: d.value, sides: d.sides, by: att.id });
+            for (const l of M.legends) if (l.faceUp) queueFrame(S, l.card, 'friendStole', f.owner, { src: 'legend', self: l.id, d: { by: att.id, value: d.value, sides: d.sides } });
+          }
         }
         f.d.n--;
         f.i = 0;
@@ -509,10 +547,12 @@ function gainGig(S, p, dieId) {
   P.gigs.push(d);
   S.stage = 'main';
   log(S, `${S.names[p]} rolls the d${d.sides}: ${d.value}.`);
+  for (const l of P.legends) if (l.faceUp) queueFrame(S, l.card, 'roll', p, { src: 'legend', self: l.id, d: { die: d.id } });
 }
 
 function finishTurn(S) {
-  for (const P of S.players) { P.noDefeat = false; for (const u of P.field) { u.lag = false; u.tempPower = 0; u.stole = false; } }
+  for (const P of S.players) for (const u of [...P.field]) if (u.cyber && (u.stole || u.fought)) { log(S, `${dn(u)} burns out from Cyberpsychosis.`); defeat(S, u); }
+  for (const P of S.players) { P.noDefeat = false; P.safety = false; P.appetite = false; for (const u of P.field) { u.lag = false; u.tempPower = 0; u.stole = false; u.safeFight = false; u.cyber = false; u.fought = false; u.fightBonus = 0; u.stealMinus = 0; u.firstWin = false; u.firstSteal = false; u.once = {}; u.hitReady = false; } }
   if (!S.overtime && S.players[0].turnsTaken >= 7 && S.players[1].turnsTaken >= 7) { S.overtime = true; log(S, 'OVERTIME! Seven Gigs wins instantly.'); }
   startTurn(S, rival(S.active));
 }
@@ -590,11 +630,46 @@ export function checkGoSolo(S, p, legendId, payIds = null) {
   if (!d.kw.goSolo || d.cost == null) return `${dn(l)} cannot GO SOLO.`;
   return payError(S, p, goSoloCost(S, p, l), payIds, legendId);
 }
+export const callCost = (S, p) => (S.players[p].field.some((u) => u.card === 'panam-palmer-strength-through-family') ? 0 : 1);
 export function checkCall(S, p, payIds = null) {
   const P = S.players[p];
   if (P.called) return 'You already Called a Legend this turn (once per turn).';
   if (!P.legends.some((l) => !l.faceUp)) return 'All your Legends are already face-up.';
-  return payError(S, p, 1, payIds, null);
+  return payError(S, p, callCost(S, p), payIds, null);
+}
+const abilityList = (card) => { const a = ABILITIES[card]; return !a ? [] : Array.isArray(a) ? a : [a]; };
+export const abCost = (S, p, ab) => (typeof ab.cost === 'function' ? ab.cost(S, p) : ab.cost || 0);
+// The card with the ability can be a Unit/Legend or a Gear on one; `host` is the Unit/Legend that gets spent.
+export function abilitySource(S, p, id) {
+  const P = S.players[p];
+  for (const h of [...P.field, ...P.legends.filter((l) => l.faceUp)]) {
+    if (h.id === id) return { src: h, host: h };
+    const g = h.gear.find((x) => x.id === id);
+    if (g) return { src: g, host: h };
+  }
+  return null;
+}
+export const abilitiesOf = (S, p, id) => { const x = abilitySource(S, p, id); return x ? abilityList(x.src.card) : []; };
+export function checkAbility(S, p, id, n = 0, payIds = null, react = false) {
+  const x = abilitySource(S, p, id);
+  if (!x) return 'That card is not in play.';
+  const ab = abilityList(x.src.card)[n];
+  if (!ab) return 'That card has no activated ability.';
+  if (react && !ab.quick) return 'Only QUICK abilities can be used while being attacked.';
+  const h = x.host;
+  if (h.spent) return 'Its ability needs it to be ready (it is spent).';
+  if (S.players[h.owner].field.includes(h) && h.lag) return 'This Unit just arrived and cannot use SPEND abilities yet.';
+  if (ab.can) { const e = ab.can(S, p, x.src, h); if (e) return e; }
+  return payError(S, p, abCost(S, p, ab), payIds, h.id);
+}
+function doAbility(S, p, a) {
+  const x = abilitySource(S, p, a.card), n = a.n || 0;
+  const ab = abilityList(x.src.card)[n];
+  const cost = abCost(S, p, ab);
+  if (cost) pay(S, p, cost, a.pay, x.host.id);
+  log(S, `${S.names[p]} uses ${dn(x.src)}.`);
+  spendInst(S, x.host);
+  queueFrame(S, x.src.card, n ? 'ability' + (n + 1) : 'ability', p, { self: x.src.id, host: x.host.id });
 }
 export function checkAttack(S, p, unitId, target) {
   const P = S.players[p];
@@ -618,8 +693,16 @@ export function checkAttack(S, p, unitId, target) {
   }
   const t = S.players[rival(p)].field.find((x) => x.id === target.id);
   if (!t) return 'That is not a rival Unit.';
-  const canHitReady = (u.freeAttack === 'readyOnce') || (u.card === 'valentino-guerrera' && cred(S, p) > cred(S, rival(p)) && hasBlocker(t));
+  const canHitReady = (u.freeAttack === 'readyOnce') || u.hitReady || (u.card === 'valentino-guerrera' && cred(S, p) > cred(S, rival(p)) && hasBlocker(t));
   if (!t.spent && !canHitReady) return 'You can only attack spent rival Units. Ready Units cannot be attacked.';
+  return null;
+}
+export function forcedAttack(S, p) {
+  const P = S.players[p];
+  for (const u of P.field) {
+    if (u.mustAttack !== S.turnNo) continue;
+    if (!checkAttack(S, p, u.id, { type: 'gigs' }) || S.players[rival(p)].field.some((t) => !checkAttack(S, p, u.id, { type: 'unit', id: t.id }))) return u;
+  }
   return null;
 }
 export function blockersFor(S, p) {
@@ -636,25 +719,45 @@ function resolveCombat(S) {
   if (c.target.type === 'unit') {
     const dfn = find(S, c.target.id);
     if (!dfn) return;
-    const pa = power(S, att, true), pd = power(S, dfn);
+    const fp = (u, o, atk) => power(S, u, atk) + (u.fightBonus || 0) + (u.card === 'meredith-stout-stone-cold-corpo' && o.isLegend ? 2 : 0);
+    const pa = fp(att, dfn, true), pd = fp(dfn, att, false);
     log(S, `${dn(att)} (${pa}) fights ${dn(dfn)} (${pd}).`);
-    const aWins = pa > pd, dWins = pd > pa, tie = pa === pd;
+    const corpo = (u) => def(u).tags.includes('CORPO');
+    let aWins = pa > pd, dWins = pd > pa;
+    if (att.card === 'johnny-silverhand-never-stop-fighting' && corpo(dfn)) { aWins = true; dWins = false; log(S, 'Johnny wins all fights against CORPO Units.'); }
+    else if (dfn.card === 'johnny-silverhand-never-stop-fighting' && corpo(att)) { dWins = true; aWins = false; log(S, 'Johnny wins all fights against CORPO Units.'); }
+    const tie = !aWins && !dWins;
+    att.fought = true; dfn.fought = true;
+    const win = aWins ? att : dWins ? dfn : null, lose = aWins ? dfn : dWins ? att : null;
+    let saved = null;
+    if (win) {
+      const diff = Math.abs(pa - pd);
+      queueFrame(S, win.card, 'fightWinU', win.owner, { self: win.id, d: { opp: lose.id, diff } });
+      const W = S.players[win.owner];
+      if (W.appetite && diff >= 3) { W.appetite = false; log(S, `Appetite for Destruction: ${dn(win)} also steals a Gig.`); queueFrame(S, 'steal', 'steal', win.owner, { src: 'internal', d: { n: 1, unit: win.id } }); }
+      queueFrame(S, lose.card, 'fightLoseU', lose.owner, { self: lose.id, d: { opp: win.id } });
+      const L = S.players[lose.owner];
+      if (L.safety) { L.safety = false; saved = win; }
+    }
     const A = S.players[att.owner], D = S.players[dfn.owner];
     let killDef = aWins || tie, killAtt = dWins || tie;
     // Reboot Optics: the opposing friendly Unit isn't defeated by a rival Unit in the next fight.
     if (A.noDefeat) { if (killAtt) log(S, `Reboot Optics: ${dn(att)} is not defeated.`); killAtt = false; }
     if (D.noDefeat) { if (killDef) log(S, `Reboot Optics: ${dn(dfn)} is not defeated.`); killDef = false; }
     A.noDefeat = false; D.noDefeat = false;
+    if (att.safeFight && killAtt) { log(S, `${dn(att)} cannot be defeated in this fight.`); killAtt = false; }
+    if (dfn.safeFight && killDef) { log(S, `${dn(dfn)} cannot be defeated in this fight.`); killDef = false; }
     if (aWins) fireGear(S, att, 'fightWin');
     if (dWins) fireGear(S, dfn, 'fightWin');
     if (killDef) defeat(S, dfn);
     if (killAtt) defeat(S, att);
+    if (saved && find(S, saved.id)) { log(S, `Safety Override: ${dn(saved)} is defeated.`); defeat(S, saved); }
     return;
   }
   // Steal: 1 Gig, +1 for every 10 power; power 0 steals nothing. Blocked attacks never steal.
   if (c.noSteal) return;
   const pw = power(S, att, true);
-  const n = pw >= 1 ? Math.floor(pw / 10) + 1 : 0;
+  const n = pw >= 1 ? Math.max(0, Math.floor(pw / 10) + 1 - (att.stealMinus || 0)) : 0;
   if (!n) { log(S, `${dn(att)} has no power and steals nothing.`); return; }
   queueFrame(S, 'steal', 'steal', c.owner, { src: 'internal', d: { n, unit: att.id } });
 }
@@ -752,7 +855,7 @@ function dispatch(S, a) {
     }
     case 'call': {
       const e = checkCall(S, p, a.pay); if (e) return e;
-      pay(S, p, 1, a.pay);
+      pay(S, p, callCost(S, p), a.pay);
       doCall(S, p);
       return null;
     }
@@ -767,9 +870,16 @@ function dispatch(S, a) {
       S.combat = { attacker: u.id, owner: p, target: a.target, stage: 'triggers', blocked: false, noSteal: false };
       return null;
     }
-    case 'endTurn':
+    case 'ability': {
+      const e = checkAbility(S, p, a.card, a.n || 0, a.pay); if (e) return e;
+      doAbility(S, p, a);
+      return null;
+    }
+    case 'endTurn': {
+      const m = forcedAttack(S, p); if (m) return `${dn(m)} must attack this turn if it can.`;
       doEndTurn(S);
       return null;
+    }
     default:
       return 'Unknown action.';
   }
@@ -807,6 +917,7 @@ function doPlay(S, p, a, react) {
   } else {
     P.trash.push(c);
     log(S, `${S.names[p]} plays ${dn(c)}.`);
+    if (d.tags.includes('BRAINDANCE')) legendTrigger(S, p, 'playBraindance');
     queueFrame(S, c.card, 'play', p, { self: c.id });
   }
   return null;
@@ -828,12 +939,13 @@ function dispatchReact(S, a, p) {
       c.target = { type: 'unit', id: b.id };
       log(S, `${dn(b)} blocks!`);
       fire(S, b, 'block');
+      legendTrigger(S, b.owner, 'block');
       return null;
     }
     case 'call': {
       const e = checkCall(S, p, a.pay); if (e) return e;
       S.pending = null;
-      pay(S, p, 1, a.pay);
+      pay(S, p, callCost(S, p), a.pay);
       doCall(S, p);
       return null;
     }
@@ -841,6 +953,12 @@ function dispatchReact(S, a, p) {
       const e = checkPlay(S, p, a.card, { target: a.target, payIds: a.pay, react: true }); if (e) return e;
       S.pending = null;
       return doPlay(S, p, a, true);
+    }
+    case 'ability': {
+      const e = checkAbility(S, p, a.card, a.n || 0, a.pay, true); if (e) return e;
+      S.pending = null;
+      doAbility(S, p, a);
+      return null;
     }
     default:
       return 'You are being attacked: block, Call a Legend, play a QUICK Program, or pass.';
@@ -868,6 +986,7 @@ export function legalActions(S) {
         for (const b of blockersFor(S, p)) out.push({ type: 'block', player: p, unit: b.id });
         if (!checkCall(S, p)) out.push({ type: 'call', player: p });
         const P = S.players[p];
+        for (const h of [...P.field, ...P.legends.filter((l) => l.faceUp)]) for (const id of [h.id, ...h.gear.map((g) => g.id)]) abilitiesOf(S, p, id).forEach((ab, n) => { if (ab.quick && !checkAbility(S, p, id, n, null, true)) out.push({ type: 'ability', player: p, card: id, n }); });
         for (const c of P.hand) {
           const d = def(c);
           if (d.type === 'program' && d.kw.quick && !checkPlay(S, p, c.id, { react: true })) out.push({ type: 'play', player: p, card: c.id });
@@ -889,10 +1008,11 @@ export function legalActions(S) {
   }
   for (const l of P.legends) if (!checkGoSolo(S, p, l.id)) out.push({ type: 'goSolo', player: p, legend: l.id });
   if (!checkCall(S, p)) out.push({ type: 'call', player: p });
+  for (const h of [...P.field, ...P.legends.filter((l) => l.faceUp)]) for (const id of [h.id, ...h.gear.map((g) => g.id)]) abilitiesOf(S, p, id).forEach((_, n) => { if (!checkAbility(S, p, id, n)) out.push({ type: 'ability', player: p, card: id, n }); });
   for (const u of P.field) {
     if (!checkAttack(S, p, u.id, { type: 'gigs' })) out.push({ type: 'attack', player: p, unit: u.id, target: { type: 'gigs' } });
     for (const t of S.players[rival(p)].field) if (!checkAttack(S, p, u.id, { type: 'unit', id: t.id })) out.push({ type: 'attack', player: p, unit: u.id, target: { type: 'unit', id: t.id } });
   }
-  out.push({ type: 'endTurn', player: p });
+  if (!forcedAttack(S, p)) out.push({ type: 'endTurn', player: p });
   return out;
 }
